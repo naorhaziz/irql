@@ -1,0 +1,7 @@
+[package]
+name = "struct_example"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+irql = { path = "../../crates/irql" }

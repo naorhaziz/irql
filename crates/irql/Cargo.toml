@@ -1,0 +1,19 @@
+[package]
+name = "irql"
+version.workspace = true
+edition.workspace = true
+description = "Compile-time IRQL safety for Windows kernel drivers"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/irql"
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+irql_core = { version = "0.1.2", path = "../irql_core" }
+irql_macro = { version = "0.1.2", path = "../irql_macro" }

@@ -1,0 +1,16 @@
+[package]
+name = "irql_core"
+version.workspace = true
+edition.workspace = true
+description = "Core types and traits for IRQL safety"
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]

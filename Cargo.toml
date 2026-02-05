@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "examples/*"]
+
+[workspace.package]
+version = "0.1.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/naorhaziz/irql"
+keywords = ["windows", "kernel", "irql", "driver"]
+categories = ["no-std", "development-tools"]
