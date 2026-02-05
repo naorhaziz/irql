@@ -5,7 +5,9 @@
 #![no_std]
 #![warn(missing_docs)]
 
+/// Private module to prevent external implementations of sealed traits.
 mod private {
+    /// Sealed trait to prevent external implementations.
     pub trait Sealed {}
 }
 
@@ -55,3 +57,83 @@ macro_rules! define_irql_hierarchy {
 define_irql_hierarchy!(
     Passive, Apc, Dispatch, Dirql, Profile, Clock, Ipi, Power, High
 );
+
+/// A function trait that is safe to call at a specific IRQL level.
+///
+/// This trait is similar to `Fn`, but with IRQL safety guarantees.
+/// The function can only be called from an IRQL level that can raise to `Level`.
+pub trait IrqlFn<Level: IrqlLevel, Args> {
+    /// The return type of the function.
+    type Output;
+
+    /// Call the function with IRQL safety.
+    ///
+    /// # Safety
+    /// This method is only callable when `IRQL` can raise to `Level`.
+    fn call<IRQL>(&self, args: Args) -> Self::Output
+    where
+        IRQL: IrqlCanRaiseTo<Level>;
+}
+
+/// A mutable function trait that is safe to call at a specific IRQL level.
+///
+/// This trait is similar to `FnMut`, but with IRQL safety guarantees.
+pub trait IrqlFnMut<Level: IrqlLevel, Args> {
+    /// The return type of the function.
+    type Output;
+
+    /// Call the function mutably with IRQL safety.
+    ///
+    /// # Safety
+    /// This method is only callable when `IRQL` can raise to `Level`.
+    fn call_mut<IRQL>(&mut self, args: Args) -> Self::Output
+    where
+        IRQL: IrqlCanRaiseTo<Level>;
+}
+
+/// A once-callable function trait that is safe to call at a specific IRQL level.
+///
+/// This trait is similar to `FnOnce`, but with IRQL safety guarantees.
+pub trait IrqlFnOnce<Level: IrqlLevel, Args> {
+    /// The return type of the function.
+    type Output;
+
+    /// Call the function, consuming it, with IRQL safety.
+    ///
+    /// # Safety
+    /// This method is only callable when `IRQL` can raise to `Level`.
+    fn call_once<IRQL>(self, args: Args) -> Self::Output
+    where
+        IRQL: IrqlCanRaiseTo<Level>;
+}
+
+/// An async function trait that is safe to call at a specific IRQL level.
+///
+/// This trait represents async functions with IRQL safety guarantees.
+/// Note: async operations are typically only safe at `Passive` or `Apc` IRQL.
+pub trait IrqlAsyncFn<Level: IrqlLevel, Args> {
+    /// The future type returned by the async function.
+    type Future: core::future::Future<Output = Self::Output>;
+
+    /// The return type of the async function.
+    type Output;
+
+    /// Call the async function.
+    ///
+    /// # Safety
+    /// This method is only callable when `IRQL` can raise to `Level`.
+    fn call_async<IRQL>(&self, args: Args) -> Self::Future
+    where
+        IRQL: IrqlCanRaiseTo<Level>;
+}
+
+/// An async mutable function trait that is safe to call at a specific IRQL level.
+pub trait IrqlAsyncFnMut<Level: IrqlLevel, Args>: IrqlAsyncFn<Level, Args> {
+    /// Call the async function mutably.
+    ///
+    /// # Safety
+    /// This method is only callable when `IRQL` can raise to `Level`.
+    fn call_async_mut<IRQL>(&mut self, args: Args) -> Self::Future
+    where
+        IRQL: IrqlCanRaiseTo<Level>;
+}

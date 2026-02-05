@@ -1,0 +1,8 @@
+[package]
+name = "function_traits"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+irql = { path = "../../crates/irql" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -18,6 +18,7 @@ A Rust library providing compile-time verification of IRQL (Interrupt Request Le
 - **Zero Runtime Overhead**: All checks happen at compile time using Rust's type system
 - **Clear Error Messages**: Helpful diagnostics explain exactly what IRQL violation occurred
 - **Ergonomic API**: Natural Rust syntax with attributes and macros
+- **Function Traits**: IRQL-safe versions of `Fn`, `FnMut`, `FnOnce`, and async variants
 - **no_std Compatible**: Designed for kernel-mode environments
 
 ## Installation
@@ -30,6 +31,8 @@ irql = "0.1.2"
 ```
 
 ## Quick Start
+
+### Basic IRQL Functions
 
 ```rust
 use irql::{requires_irql, root_irql, Dispatch, Passive};
@@ -51,6 +54,23 @@ fn driver_routine() {
 #[root_irql(Passive)]
 fn main() {
     call_irql!(driver_routine());
+}
+```
+
+### IRQL-Safe Function Traits
+
+```rust
+use irql::{fn_trait_irql_requires, IrqlFn, Passive};
+
+struct Handler { device_id: u32 }
+
+#[fn_trait_irql_requires(Passive)]
+impl IrqlFn<()> for Handler {
+    type Output = u32;
+    
+    fn call(&self, _args: ()) -> u32 {
+        self.device_id
+    }
 }
 ```
 
@@ -151,6 +171,82 @@ fn example() {
 }
 ```
 
+#### `#[fn_trait_irql_requires(Level)]`
+
+Implements IRQL-safe function traits with compile-time safety guarantees. Works with all IRQL function traits: `IrqlFn`, `IrqlFnMut`, `IrqlFnOnce`, `IrqlAsyncFn`, `IrqlAsyncFnMut`.
+
+This macro automatically:
+1. Extracts the `Args` type from the trait bound (e.g., `IrqlFn<()>`)
+2. Injects the IRQL level as the first generic parameter
+3. Adds `<IRQL>` generic and `where IRQL: IrqlCanRaiseTo<Level>` to all methods
+4. Injects the `call_irql!` macro into each method body for nested calls
+
+```rust
+use irql::{fn_trait_irql_requires, IrqlFn, Passive};
+
+struct Reader { value: u32 }
+
+#[fn_trait_irql_requires(Passive)]
+impl IrqlFn<()> for Reader {
+    type Output = u32;
+    
+    fn call(&self, _args: ()) -> u32 {
+        self.value
+    }
+}
+```
+
+**Mutable function with state:**
+
+```rust
+use irql::{fn_trait_irql_requires, IrqlFnMut, Dispatch};
+
+struct Counter { count: u32 }
+
+#[fn_trait_irql_requires(Dispatch)]
+impl IrqlFnMut<()> for Counter {
+    type Output = u32;
+    
+    fn call_mut(&mut self, _args: ()) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+```
+
+**Async function:**
+
+```rust
+use irql::{fn_trait_irql_requires, IrqlAsyncFn, Passive};
+use std::future::Future;
+use std::pin::Pin;
+
+struct AsyncReader { data: String }
+
+#[fn_trait_irql_requires(Passive)]
+impl IrqlAsyncFn<()> for AsyncReader {
+    type Output = String;
+    type Future = Pin<Box<dyn Future<Output = String> + Send>>;
+    
+    fn call_async(&self, _args: ()) -> Self::Future {
+        let data = self.data.clone();
+        Box::pin(async move { data })
+    }
+}
+```
+
+### Traits
+
+The library provides IRQL-aware function traits that mirror Rust's standard function traits but with compile-time IRQL safety:
+
+- **`IrqlFn<Level, Args>`**: Immutable function calls (like `Fn`)
+- **`IrqlFnMut<Level, Args>`**: Mutable function calls (like `FnMut`)
+- **`IrqlFnOnce<Level, Args>`**: One-time consumption (like `FnOnce`)
+- **`IrqlAsyncFn<Level, Args>`**: Async immutable calls
+- **`IrqlAsyncFnMut<Level, Args>`**: Async mutable calls
+
+These traits ensure functions can only be called from compatible IRQL contexts at compile time.
+
 ## Examples
 
 ### Basic Functions
@@ -230,6 +326,44 @@ error: IRQL violation: cannot call function at `Passive` IRQL from current IRQL 
    |     ^^^^^^^^^^^^^^^^^^^^^^^ cannot lower IRQL or call incompatible IRQL level
    |
    = note: IRQL can only stay the same or be raised, never lowered
+```
+
+### IRQL-Safe Function Traits
+
+Use function traits to create reusable, IRQL-safe callbacks and function objects:
+
+```rust
+use irql::{fn_trait_irql_requires, root_irql, IrqlFn, IrqlFnMut, Passive};
+
+// Immutable reader
+struct Reader { value: u32 }
+
+#[fn_trait_irql_requires(Passive)]
+impl IrqlFn<()> for Reader {
+    type Output = u32;
+    fn call(&self, _args: ()) -> u32 { self.value }
+}
+
+// Mutable counter
+struct Counter { count: u32 }
+
+#[fn_trait_irql_requires(Passive)]
+impl IrqlFnMut<()> for Counter {
+    type Output = u32;
+    fn call_mut(&mut self, _args: ()) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
+#[root_irql(Passive)]
+fn main() {
+    let reader = Reader { value: 42 };
+    let mut counter = Counter { count: 0 };
+    
+    println!("Value: {}", reader.call::<Passive>(()));
+    println!("Count: {}", counter.call_mut::<Passive>(()));
+}
 ```
 
 ## How It Works

@@ -204,3 +204,133 @@ fn root_irql_impl(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStre
 
     Ok(TokenStream::from(quote! { #input_fn }))
 }
+
+#[proc_macro_attribute]
+pub fn fn_trait_irql_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match irql_impl_internal(attr, item) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn irql_impl_internal(
+    attr: TokenStream,
+    item: TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    if attr.is_empty() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "missing IRQL level: expected #[fn_trait_irql_requires(Passive)], #[fn_trait_irql_requires(Dispatch)], etc.",
+        ));
+    }
+
+    let irql_level: Type = syn::parse(attr)
+        .map_err(|e| syn::Error::new(e.span(), format!("invalid IRQL level: {}", e)))?;
+
+    let mut impl_block: ItemImpl = syn::parse(item)
+        .map_err(|e| syn::Error::new(e.span(), format!("expected trait impl block: {}", e)))?;
+
+    if impl_block.trait_.is_none() {
+        return Err(syn::Error::new_spanned(
+            &impl_block,
+            "#[fn_trait_irql_requires] requires a trait implementation. Example: impl IrqlFn<()> for MyType { ... }",
+        ));
+    }
+
+    let (_, trait_path, _) = impl_block.trait_.as_mut().unwrap();
+
+    let last_segment = trait_path
+        .segments
+        .last_mut()
+        .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "trait path is empty"))?;
+
+    let trait_name = last_segment.ident.to_string();
+
+    let args_type = match &last_segment.arguments {
+        syn::PathArguments::AngleBracketed(args) => {
+            if args.args.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    args,
+                    format!(
+                        "trait {} must have Args type parameter. Example: {}<Args>",
+                        trait_name, trait_name
+                    ),
+                ));
+            }
+            if args.args.len() != 1 {
+                return Err(syn::Error::new_spanned(
+                    args,
+                    format!(
+                        "expected exactly 1 type parameter (Args), found {}. IRQL level will be added automatically.",
+                        args.args.len()
+                    ),
+                ));
+            }
+            match args.args.first().unwrap() {
+                syn::GenericArgument::Type(ty) => ty.clone(),
+                arg => {
+                    return Err(syn::Error::new_spanned(
+                        arg,
+                        "expected type parameter for Args",
+                    ));
+                }
+            }
+        }
+        syn::PathArguments::None => {
+            return Err(syn::Error::new_spanned(
+                last_segment,
+                format!(
+                    "trait {} must have Args type parameter in angle brackets. Example: {}<()>",
+                    trait_name, trait_name
+                ),
+            ));
+        }
+        syn::PathArguments::Parenthesized(_) => {
+            return Err(syn::Error::new_spanned(
+                last_segment,
+                "parenthesized arguments not supported, use angle brackets for Args type",
+            ));
+        }
+    };
+
+    last_segment.arguments =
+        syn::PathArguments::AngleBracketed(parse_quote! { <#irql_level, #args_type> });
+
+    let method_count = impl_block
+        .items
+        .iter()
+        .filter(|item| matches!(item, ImplItem::Fn(_)))
+        .count();
+
+    if method_count == 0 {
+        return Err(syn::Error::new_spanned(
+            &impl_block,
+            "trait implementation must have at least one method",
+        ));
+    }
+
+    for item in impl_block.items.iter_mut() {
+        if let ImplItem::Fn(method) = item {
+            method.sig.generics.params.push(parse_quote! { IRQL });
+
+            let where_clause = method.sig.generics.make_where_clause();
+            where_clause.predicates.push(parse_quote! {
+                IRQL: ::irql::IrqlCanRaiseTo<#irql_level>
+            });
+
+            method.block.stmts.insert(
+                0,
+                parse_quote! {
+                    #[allow(unused_macros)]
+                    macro_rules! call_irql {
+                        ($($tt:tt)*) => {
+                            ::irql::call_irql_inner!(#irql_level, $($tt)*)
+                        };
+                    }
+                },
+            );
+        }
+    }
+
+    Ok(quote! { #impl_block })
+}

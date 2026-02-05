@@ -112,6 +112,9 @@ pub use irql_core::{
     Apc, Clock, Dirql, Dispatch, High, Ipi, IrqlCanRaiseTo, IrqlLevel, Passive, Power, Profile,
 };
 
+// Re-export function traits
+pub use irql_core::{IrqlAsyncFn, IrqlAsyncFnMut, IrqlFn, IrqlFnMut, IrqlFnOnce};
+
 // Re-export macros
 pub use irql_macro::call_irql_inner;
 
@@ -142,3 +145,17 @@ pub use irql_macro::requires_irql;
 /// }
 /// ```
 pub use irql_macro::root_irql;
+
+/// Implements IRQL-safe function traits with compile-time safety guarantees.
+///
+/// Works with: `IrqlFn`, `IrqlFnMut`, `IrqlFnOnce`, `IrqlAsyncFn`, `IrqlAsyncFnMut`.
+///
+/// # Example
+/// ```ignore
+/// #[fn_trait_irql_requires(Passive)]
+/// impl IrqlFn<()> for MyType {
+///     type Output = u32;
+///     fn call(&self, _args: ()) -> u32 { self.value }
+/// }
+/// ```
+pub use irql_macro::fn_trait_irql_requires;
