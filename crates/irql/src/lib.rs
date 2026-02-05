@@ -45,6 +45,7 @@
 //!
 //! - [`requires_irql`] - Mark functions requiring a minimum IRQL
 //! - [`root_irql`] - Mark entry points with their IRQL level
+//! - [`fn_trait_irql_requires`] - Implement IRQL-safe function traits
 //! - `call_irql!` - Call IRQL-constrained functions (available inside annotated functions)
 //!
 //! # Example: Struct Methods
@@ -71,6 +72,55 @@
 //! fn interrupt_handler() {
 //!     let device = call_irql!(Device::new(1));
 //!     call_irql!(device.process_interrupt());
+//! }
+//! ```
+//!
+//! # IRQL-Safe Function Traits
+//!
+//! The crate provides IRQL-aware function traits that mirror Rust's standard function traits:
+//!
+//! - [`IrqlFn`] - Immutable function calls (like `Fn`)
+//! - [`IrqlFnMut`] - Mutable function calls (like `FnMut`)
+//! - [`IrqlFnOnce`] - One-time consumption (like `FnOnce`)
+//! - [`IrqlAsyncFn`] - Async immutable calls
+//! - [`IrqlAsyncFnMut`] - Async mutable calls
+//!
+//! Use [`fn_trait_irql_requires`] to implement these traits with compile-time IRQL safety:
+//!
+//! ```no_run
+//! use irql::{fn_trait_irql_requires, IrqlFn, IrqlFnMut, Passive, root_irql};
+//!
+//! // Immutable function object
+//! struct Reader { value: u32 }
+//!
+//! #[fn_trait_irql_requires(Passive)]
+//! impl IrqlFn<()> for Reader {
+//!     type Output = u32;
+//!     fn call(&self, _args: ()) -> u32 {
+//!         self.value
+//!     }
+//! }
+//!
+//! // Mutable function object
+//! struct Counter { count: u32 }
+//!
+//! #[fn_trait_irql_requires(Passive)]
+//! impl IrqlFnMut<()> for Counter {
+//!     type Output = u32;
+//!     fn call_mut(&mut self, _args: ()) -> u32 {
+//!         self.count += 1;
+//!         self.count
+//!     }
+//! }
+//!
+//! // Usage
+//! #[root_irql(Passive)]
+//! fn example() {
+//!     let reader = Reader { value: 42 };
+//!     let mut counter = Counter { count: 0 };
+//!
+//!     let val = call_irql!(reader.call(()));
+//!     let count = call_irql!(counter.call_mut(()));
 //! }
 //! ```
 //!

@@ -15,5 +15,5 @@ default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
 
 [dependencies]
-irql_core = { version = "0.1.2", path = "../irql_core" }
-irql_macro = { version = "0.1.2", path = "../irql_macro" }
+irql_core = { version = "0.1.3", path = "../irql_core" }
+irql_macro = { version = "0.1.3", path = "../irql_macro" }

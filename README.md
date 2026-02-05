@@ -27,7 +27,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-irql = "0.1.2"
+irql = "0.1.3"
 ```
 
 ## Quick Start
@@ -361,8 +361,8 @@ fn main() {
     let reader = Reader { value: 42 };
     let mut counter = Counter { count: 0 };
     
-    println!("Value: {}", reader.call::<Passive>(()));
-    println!("Count: {}", counter.call_mut::<Passive>(()));
+    println!("Value: {}", call_irql!(reader.call(())));
+    println!("Count: {}", call_irql!(counter.call_mut(())));
 }
 ```
 
@@ -413,11 +413,27 @@ where
 The Rust compiler verifies the constraints:
 
 ```rust
-// Compiles: Passive -> Dispatch (raising IRQL)
-process::<Dispatch>();
+use irql::{requires_irql, root_irql, Dispatch, Passive};
 
-// Compile error: Dispatch -> Passive (lowering IRQL)
-process::<Passive>(); // Error!
+#[requires_irql(Dispatch)]
+fn process() {
+    // Requires Dispatch IRQL
+}
+
+// Compiles: Passive can raise to Dispatch
+#[root_irql(Passive)]
+fn valid_caller() {
+    call_irql!(process());  // OK: raising IRQL
+}
+
+// Compile error: Dispatch cannot lower to Passive
+#[root_irql(Dispatch)]
+fn invalid_caller() {
+    #[requires_irql(Passive)]
+    fn low_irql() { }
+    
+    call_irql!(low_irql());  // Error: Cannot lower IRQL!
+}
 ```
 
 ## Safety Considerations
