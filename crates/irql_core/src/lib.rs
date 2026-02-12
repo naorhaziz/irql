@@ -1,56 +1,70 @@
-//! Core types and traits for IRQL safety.
+//! Core types and traits for compile-time IRQL safety.
 //!
-//! This is an internal crate. Use the `irql` crate instead.
+//! **Internal crate** — use [`irql`](https://docs.rs/irql) instead.
 
 #![no_std]
 #![warn(missing_docs)]
 
-/// Private module to prevent external implementations of sealed traits.
 mod private {
-    /// Sealed trait to prevent external implementations.
     pub trait Sealed {}
 }
 
-/// Marker trait for IRQL level types.
+/// Marker trait implemented by all IRQL level types.
 pub trait IrqlLevel: private::Sealed {}
 
-/// Trait indicating that an IRQL level can be raised to a target level.
+/// The current IRQL can be raised to `Target`.
 ///
-/// This trait is automatically implemented for valid IRQL transitions.
-/// IRQL can only stay the same or be raised, never lowered.
+/// Holds when `Self <= Target` in the IRQL hierarchy.
+/// Implemented automatically for all valid transitions.
 #[diagnostic::on_unimplemented(
-    message = "IRQL violation: cannot call function at `{Target}` IRQL from current IRQL level `{Self}`",
-    label = "cannot lower IRQL or call incompatible IRQL level",
+    message = "IRQL violation: cannot reach `{Target}` from `{Self}` -- would require lowering",
+    label = "cannot lower IRQL",
     note = "IRQL can only stay the same or be raised, never lowered"
 )]
 pub trait IrqlCanRaiseTo<Target: IrqlLevel>: private::Sealed {}
 
+/// The current IRQL is at or above `Target`.
+///
+/// Holds when `Self >= Target` in the IRQL hierarchy.
+/// Used by `#[irql(min = Level)]` to enforce a floor constraint.
+#[diagnostic::on_unimplemented(
+    message = "IRQL violation: `{Self}` is below the required minimum `{Target}`",
+    label = "IRQL too low",
+    note = "this operation requires IRQL >= `{Target}`"
+)]
+pub trait IrqlCanLowerTo<Target: IrqlLevel>: private::Sealed {}
+
 macro_rules! define_irql_hierarchy {
-    ($($level:ident),*) => {
+    ($($level:ident),+) => {
         $(
-            #[doc = concat!("IRQL level: ", stringify!($level))]
+            #[doc = concat!("IRQL level: `", stringify!($level), "`.")]
             #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
             pub struct $level;
-
             impl private::Sealed for $level {}
             impl IrqlLevel for $level {}
-        )*
-
-        define_irql_hierarchy!(@rules $($level),*);
+        )+
+        define_irql_hierarchy!(@raise $($level),+);
+        define_irql_hierarchy!(@lower $($level),+);
     };
 
-    (@rules $current:ident, $($rest:ident),*) => {
-        impl IrqlCanRaiseTo<$current> for $current {}
-
-        $(
-            impl IrqlCanRaiseTo<$rest> for $current {}
-        )*
-
-        define_irql_hierarchy!(@rules $($rest),*);
+    // Each level can raise to itself and all higher levels.
+    (@raise $head:ident, $($tail:ident),+) => {
+        impl IrqlCanRaiseTo<$head> for $head {}
+        $( impl IrqlCanRaiseTo<$tail> for $head {} )+
+        define_irql_hierarchy!(@raise $($tail),+);
+    };
+    (@raise $last:ident) => {
+        impl IrqlCanRaiseTo<$last> for $last {}
     };
 
-    (@rules $current:ident) => {
-        impl IrqlCanRaiseTo<$current> for $current {}
+    // Each level can lower to itself and all lower levels.
+    (@lower $head:ident, $($tail:ident),+) => {
+        impl IrqlCanLowerTo<$head> for $head {}
+        $( impl IrqlCanLowerTo<$head> for $tail {} )+
+        define_irql_hierarchy!(@lower $($tail),+);
+    };
+    (@lower $last:ident) => {
+        impl IrqlCanLowerTo<$last> for $last {}
     };
 }
 
@@ -58,82 +72,38 @@ define_irql_hierarchy!(
     Passive, Apc, Dispatch, Dirql, Profile, Clock, Ipi, Power, High
 );
 
-/// A function trait that is safe to call at a specific IRQL level.
+/// IRQL-safe analogue of [`Fn`].
 ///
-/// This trait is similar to `Fn`, but with IRQL safety guarantees.
-/// The function can only be called from an IRQL level that can raise to `Level`.
-pub trait IrqlFn<Level: IrqlLevel, Args> {
-    /// The return type of the function.
+/// Callable from any IRQL in the range \[`Min`, `Level`\].
+/// `Min` defaults to [`Passive`] (no floor) when omitted.
+pub trait IrqlFn<Level: IrqlLevel, Args, Min: IrqlLevel = Passive> {
+    /// The return type.
     type Output;
 
-    /// Call the function with IRQL safety.
-    ///
-    /// # Safety
-    /// This method is only callable when `IRQL` can raise to `Level`.
+    /// Call the function. Only compiles when the caller's IRQL satisfies both bounds.
     fn call<IRQL>(&self, args: Args) -> Self::Output
     where
-        IRQL: IrqlCanRaiseTo<Level>;
+        IRQL: IrqlCanRaiseTo<Level> + IrqlCanLowerTo<Min>;
 }
 
-/// A mutable function trait that is safe to call at a specific IRQL level.
-///
-/// This trait is similar to `FnMut`, but with IRQL safety guarantees.
-pub trait IrqlFnMut<Level: IrqlLevel, Args> {
-    /// The return type of the function.
+/// IRQL-safe analogue of [`FnMut`]. See [`IrqlFn`] for details.
+pub trait IrqlFnMut<Level: IrqlLevel, Args, Min: IrqlLevel = Passive> {
+    /// The return type.
     type Output;
 
-    /// Call the function mutably with IRQL safety.
-    ///
-    /// # Safety
-    /// This method is only callable when `IRQL` can raise to `Level`.
+    /// Call the function mutably.
     fn call_mut<IRQL>(&mut self, args: Args) -> Self::Output
     where
-        IRQL: IrqlCanRaiseTo<Level>;
+        IRQL: IrqlCanRaiseTo<Level> + IrqlCanLowerTo<Min>;
 }
 
-/// A once-callable function trait that is safe to call at a specific IRQL level.
-///
-/// This trait is similar to `FnOnce`, but with IRQL safety guarantees.
-pub trait IrqlFnOnce<Level: IrqlLevel, Args> {
-    /// The return type of the function.
+/// IRQL-safe analogue of [`FnOnce`]. See [`IrqlFn`] for details.
+pub trait IrqlFnOnce<Level: IrqlLevel, Args, Min: IrqlLevel = Passive> {
+    /// The return type.
     type Output;
 
-    /// Call the function, consuming it, with IRQL safety.
-    ///
-    /// # Safety
-    /// This method is only callable when `IRQL` can raise to `Level`.
+    /// Call the function, consuming it.
     fn call_once<IRQL>(self, args: Args) -> Self::Output
     where
-        IRQL: IrqlCanRaiseTo<Level>;
-}
-
-/// An async function trait that is safe to call at a specific IRQL level.
-///
-/// This trait represents async functions with IRQL safety guarantees.
-/// Note: async operations are typically only safe at `Passive` or `Apc` IRQL.
-pub trait IrqlAsyncFn<Level: IrqlLevel, Args> {
-    /// The future type returned by the async function.
-    type Future: core::future::Future<Output = Self::Output>;
-
-    /// The return type of the async function.
-    type Output;
-
-    /// Call the async function.
-    ///
-    /// # Safety
-    /// This method is only callable when `IRQL` can raise to `Level`.
-    fn call_async<IRQL>(&self, args: Args) -> Self::Future
-    where
-        IRQL: IrqlCanRaiseTo<Level>;
-}
-
-/// An async mutable function trait that is safe to call at a specific IRQL level.
-pub trait IrqlAsyncFnMut<Level: IrqlLevel, Args>: IrqlAsyncFn<Level, Args> {
-    /// Call the async function mutably.
-    ///
-    /// # Safety
-    /// This method is only callable when `IRQL` can raise to `Level`.
-    fn call_async_mut<IRQL>(&mut self, args: Args) -> Self::Future
-    where
-        IRQL: IrqlCanRaiseTo<Level>;
+        IRQL: IrqlCanRaiseTo<Level> + IrqlCanLowerTo<Min>;
 }

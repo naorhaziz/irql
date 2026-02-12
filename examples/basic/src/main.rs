@@ -1,22 +1,27 @@
 use irql::*;
 
-#[requires_irql(Dispatch)]
+// max-only: callable from Dispatch or below (same as #[requires_irql(Dispatch)])
+#[irql(max = Dispatch)]
 fn dispatch_work() {}
 
-#[requires_irql(Passive)]
+// max-only: callable from Passive or below
+#[irql(max = Passive)]
 fn passive_work() {
     // Passive can raise to Dispatch
     call_irql!(dispatch_work());
 }
 
+// Range: callable from Passive through Dispatch (not Dirql+)
+#[irql(min = Passive, max = Dispatch)]
+fn passive_to_dispatch_only() {}
+
 // Uncomment to see a compile error: Dispatch cannot lower to Passive
-// #[requires_irql(Dispatch)]
 // fn dispatch_calls_passive() {
-//     // This would fail - Dispatch cannot lower to Passive
-//     call_irql!(passive_work());
+//     call_irql!(passive_work::<()>());  // ERROR: Cannot lower IRQL!
 // }
 
-#[root_irql(Passive)]
+#[irql(at = Passive)]
 fn main() {
     call_irql!(passive_work());
+    call_irql!(passive_to_dispatch_only());
 }

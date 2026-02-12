@@ -1,17 +1,19 @@
-use irql::{Dispatch, Passive, requires_irql, root_irql};
+//! Struct methods with IRQL constraints via impl blocks.
+
+use irql::*;
 
 struct Device {
     _name: &'static str,
 }
 
-#[requires_irql(Dispatch)]
+#[irql(max = Dispatch)]
 impl Device {
     fn new(name: &'static str) -> Self {
         Device { _name: name }
     }
 
     fn process_interrupt(&self) {
-        // Processing interrupt at Dispatch level
+        // Runs at Dispatch or below.
     }
 }
 
@@ -19,21 +21,19 @@ struct Driver {
     device: Device,
 }
 
-#[requires_irql(Passive)]
+#[irql(max = Passive)]
 impl Driver {
     fn new(device_name: &'static str) -> Self {
-        // Create device at Dispatch level from Passive context
         let device = call_irql!(Device::new(device_name));
         Driver { device }
     }
 
     fn start(&self) {
-        // At Passive level, can raise to Dispatch
         call_irql!(self.device.process_interrupt());
     }
 }
 
-#[root_irql(Passive)]
+#[irql(at = Passive)]
 fn main() {
     let driver = call_irql!(Driver::new("example_device"));
     call_irql!(driver.start());
