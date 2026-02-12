@@ -1,6 +1,6 @@
-//! Procedural macros for IRQL safety.
+//! Procedural macros for compile-time IRQL safety.
 //!
-//! This is an internal crate. Use the `irql` crate instead.
+//! **Internal crate** — use [`irql`](https://docs.rs/irql) instead.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -9,328 +9,331 @@ use syn::{
     parse_quote, punctuated::Punctuated,
 };
 
+/// Usage hint appended to error messages.
+const USAGE: &str = "examples:\n  \
+    #[irql(at = Passive)]\n  \
+    #[irql(max = Dispatch)]\n  \
+    #[irql(min = Apc, max = Dispatch)]";
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Inserts an `IRQL` generic parameter and adds where-clause bounds.
+fn apply_irql_bounds(generics: &mut syn::Generics, c: &IrqlConstraints) {
+    generics.params.insert(0, parse_quote! { IRQL });
+    let wc = generics.make_where_clause();
+    if let Some(ref max) = c.max {
+        wc.predicates
+            .push(parse_quote! { IRQL: ::irql::IrqlCanRaiseTo<#max> });
+    }
+    if let Some(ref min) = c.min {
+        wc.predicates
+            .push(parse_quote! { IRQL: ::irql::IrqlCanLowerTo<#min> });
+    }
+}
+
+/// Injects the local `call_irql!` macro (and optionally `PhantomData<IRQL>`).
+fn inject_body(stmts: &mut Vec<syn::Stmt>, level: &Type, phantom: bool) {
+    stmts.insert(
+        0,
+        parse_quote! {
+            #[allow(unused_macros)]
+            macro_rules! call_irql {
+                ($($tt:tt)*) => {
+                    ::irql::call_irql_inner!(#level, $($tt)*)
+                };
+            }
+        },
+    );
+    if phantom {
+        stmts.insert(
+            0,
+            parse_quote! { let _ = ::core::marker::PhantomData::<IRQL>; },
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Applying constraints to items
+// ---------------------------------------------------------------------------
+
+/// Standalone function.
+fn apply_to_function(f: &mut ItemFn, c: &IrqlConstraints) {
+    apply_irql_bounds(&mut f.sig.generics, c);
+    inject_body(&mut f.block.stmts, c.call_level(), true);
+}
+
+/// Inherent impl block — each method gets its own `IRQL` generic.
+fn apply_to_impl_block(imp: &mut ItemImpl, c: &IrqlConstraints) {
+    for item in &mut imp.items {
+        if let ImplItem::Fn(m) = item {
+            apply_irql_bounds(&mut m.sig.generics, c);
+            inject_body(&mut m.block.stmts, c.call_level(), true);
+        }
+    }
+}
+
+/// Trait impl block (e.g. `impl IrqlFn<()> for T`).
+///
+/// Rewrites the trait's generic arguments and constrains each method.
+fn apply_to_trait_impl(imp: &mut ItemImpl, c: &IrqlConstraints) -> syn::Result<()> {
+    let (_, path, _) = imp.trait_.as_mut().unwrap();
+    let seg = path
+        .segments
+        .last_mut()
+        .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "empty trait path"))?;
+    let name = seg.ident.to_string();
+
+    // Extract the user-written Args type (the only generic the user provides).
+    let args = match &seg.arguments {
+        PathArguments::AngleBracketed(a) if a.args.len() == 1 => match &a.args[0] {
+            GenericArgument::Type(ty) => ty.clone(),
+            other => return Err(syn::Error::new_spanned(other, "expected a type for Args")),
+        },
+        PathArguments::AngleBracketed(a) => {
+            return Err(syn::Error::new_spanned(
+                a,
+                format!(
+                    "expected 1 type parameter (Args), found {}; \
+                     IRQL level is added automatically",
+                    a.args.len()
+                ),
+            ));
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                seg,
+                format!("{name} requires an Args type, e.g. {name}<()>"),
+            ));
+        }
+    };
+
+    // Rewrite: IrqlFn<()> → IrqlFn<Max, ()> or IrqlFn<Max, (), Min>
+    let max = c.call_level();
+    seg.arguments = if let Some(ref min) = c.min {
+        PathArguments::AngleBracketed(parse_quote! { <#max, #args, #min> })
+    } else {
+        PathArguments::AngleBracketed(parse_quote! { <#max, #args> })
+    };
+
+    // Each method: bounds + call_irql! (no PhantomData for trait methods).
+    let level = c.call_level();
+    for item in &mut imp.items {
+        if let ImplItem::Fn(m) = item {
+            apply_irql_bounds(&mut m.sig.generics, c);
+            inject_body(&mut m.block.stmts, level, false);
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Parsed constraints from #[irql(at/min/max = Level)]
+// ---------------------------------------------------------------------------
+
+struct IrqlConstraints {
+    min: Option<Type>,
+    max: Option<Type>,
+    at: Option<Type>,
+}
+
+impl IrqlConstraints {
+    fn parse(attr: TokenStream) -> syn::Result<Self> {
+        let metas = Punctuated::<syn::Meta, Token![,]>::parse_terminated.parse(attr)?;
+
+        let (mut min, mut max, mut at) = (None, None, None);
+
+        for meta in &metas {
+            let nv = match meta {
+                syn::Meta::NameValue(nv) => nv,
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        format!("expected `key = Level`.\n{USAGE}"),
+                    ));
+                }
+            };
+
+            let key = nv.path.get_ident().ok_or_else(|| {
+                syn::Error::new_spanned(&nv.path, "expected `at`, `min`, or `max`")
+            })?;
+
+            let ty: Type = match &nv.value {
+                syn::Expr::Path(p) => {
+                    let path = &p.path;
+                    parse_quote! { #path }
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "expected an IRQL level (e.g. Passive, Dispatch)",
+                    ));
+                }
+            };
+
+            let slot = if key == "at" {
+                &mut at
+            } else if key == "min" {
+                &mut min
+            } else if key == "max" {
+                &mut max
+            } else {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    format!("unknown parameter `{key}`.\n{USAGE}"),
+                ));
+            };
+
+            if slot.is_some() {
+                return Err(syn::Error::new_spanned(key, format!("duplicate `{key}`")));
+            }
+            *slot = Some(ty);
+        }
+
+        if at.is_some() && (min.is_some() || max.is_some()) {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("`at` cannot be combined with `min` or `max`.\n{USAGE}"),
+            ));
+        }
+        if at.is_none() && max.is_none() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "`max` is required (unless using `at`). \
+                     It defines the IRQL ceiling that `call_irql!` relies on.\n{USAGE}"
+                ),
+            ));
+        }
+
+        Ok(Self { min, max, at })
+    }
+
+    /// The IRQL level used by `call_irql!` inside the annotated body.
+    fn call_level(&self) -> &Type {
+        self.at
+            .as_ref()
+            .or(self.max.as_ref())
+            .expect("BUG: either `at` or `max` must be set")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #[irql(...)]
+// ---------------------------------------------------------------------------
+
+/// Compile-time IRQL constraint macro.
+///
+/// See the [`irql` crate docs](https://docs.rs/irql) for usage.
+#[proc_macro_attribute]
+pub fn irql(attr: TokenStream, item: TokenStream) -> TokenStream {
+    match irql_impl(attr, item) {
+        Ok(ts) => ts,
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+fn irql_impl(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    if attr.is_empty() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("missing IRQL constraint.\n{USAGE}"),
+        ));
+    }
+
+    let c = IrqlConstraints::parse(attr)?;
+
+    // Fixed entry point — inject call_irql! with no generic.
+    if let Some(ref at) = c.at {
+        let mut f: ItemFn = syn::parse(item).map_err(|_| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[irql(at = ...)] can only be applied to functions",
+            )
+        })?;
+        inject_body(&mut f.block.stmts, at, false);
+        return Ok(quote! { #f }.into());
+    }
+
+    // Generic IRQL — function or impl block.
+    if let Ok(mut f) = syn::parse::<ItemFn>(item.clone()) {
+        apply_to_function(&mut f, &c);
+        return Ok(quote! { #f }.into());
+    }
+
+    if let Ok(mut imp) = syn::parse::<ItemImpl>(item) {
+        if imp.trait_.is_some() {
+            apply_to_trait_impl(&mut imp, &c)?;
+        } else {
+            apply_to_impl_block(&mut imp, &c);
+        }
+        return Ok(quote! { #imp }.into());
+    }
+
+    Err(syn::Error::new(
+        proc_macro2::Span::call_site(),
+        "#[irql] can only be applied to functions or impl blocks",
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// call_irql_inner!  (plumbing used by the local call_irql! macro)
+// ---------------------------------------------------------------------------
+
+#[doc(hidden)]
 #[proc_macro]
 pub fn call_irql_inner(input: TokenStream) -> TokenStream {
     match call_irql_inner_impl(input) {
-        Ok(tokens) => tokens,
+        Ok(ts) => ts,
         Err(e) => e.to_compile_error().into(),
     }
 }
 
 fn call_irql_inner_impl(input: TokenStream) -> syn::Result<TokenStream> {
-    let parser = Punctuated::<Expr, Token![,]>::parse_separated_nonempty;
-    let exprs = parser.parse(input)?;
+    let exprs: Vec<Expr> = Punctuated::<Expr, Token![,]>::parse_separated_nonempty
+        .parse(input)?
+        .into_iter()
+        .collect();
 
-    let exprs_vec: Vec<_> = exprs.into_iter().collect();
-
-    if exprs_vec.len() != 2 {
+    if exprs.len() != 2 {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!(
-                "call_irql_inner requires exactly 2 arguments (irql_level, expression), found {}",
-                exprs_vec.len()
-            ),
+            format!("expected (level, expr), got {} arguments", exprs.len()),
         ));
     }
 
-    let irql_expr = &exprs_vec[0];
-    let code_expr = exprs_vec[1].clone();
+    let irql_expr = &exprs[0];
+    let irql_type: Type = parse_quote! { ::irql::#irql_expr };
 
-    let output = transform_call_expression(code_expr, irql_expr)?;
-
-    Ok(output.into())
-}
-
-fn transform_call_expression(
-    expr: Expr,
-    irql_expr: &Expr,
-) -> syn::Result<proc_macro2::TokenStream> {
-    match expr {
+    match exprs[1].clone() {
         Expr::Call(mut call) => {
-            if let Expr::Path(ref mut path_expr) = *call.func {
-                if path_expr.path.segments.is_empty() {
-                    return Err(syn::Error::new_spanned(path_expr, "function path is empty"));
+            if let Expr::Path(ref mut p) = *call.func {
+                if p.path.segments.is_empty() {
+                    return Err(syn::Error::new_spanned(&*p, "empty function path"));
                 }
-
-                let last_segment = path_expr.path.segments.last_mut().unwrap();
-
-                let irql_type: Type = parse_quote! { ::irql::#irql_expr };
+                let seg = p.path.segments.last_mut().unwrap();
                 let mut args: Punctuated<GenericArgument, Token![,]> = Punctuated::new();
                 args.push(GenericArgument::Type(irql_type));
-
-                last_segment.arguments = PathArguments::AngleBracketed(parse_quote! { ::<#args> });
+                if let PathArguments::AngleBracketed(ref existing) = seg.arguments {
+                    args.extend(existing.args.iter().cloned());
+                }
+                seg.arguments = PathArguments::AngleBracketed(parse_quote! { ::<#args> });
             }
-            Ok(quote! { #call })
+            Ok(quote! { #call }.into())
         }
-        Expr::MethodCall(mut method) => {
-            let irql_type: Type = parse_quote! { ::irql::#irql_expr };
+        Expr::MethodCall(mut mc) => {
             let mut args: Punctuated<GenericArgument, Token![,]> = Punctuated::new();
             args.push(GenericArgument::Type(irql_type));
-
-            method.turbofish = Some(parse_quote! { ::<#args> });
-            Ok(quote! { #method })
+            if let Some(ref existing) = mc.turbofish {
+                args.extend(existing.args.iter().cloned());
+            }
+            mc.turbofish = Some(parse_quote! { ::<#args> });
+            Ok(quote! { #mc }.into())
         }
-        _ => Err(syn::Error::new_spanned(
-            &expr,
-            "call_irql! expects a function call or method call expression",
+        other => Err(syn::Error::new_spanned(
+            &other,
+            "call_irql! expects a function or method call",
         )),
     }
-}
-
-#[proc_macro_attribute]
-pub fn requires_irql(attr: TokenStream, item: TokenStream) -> TokenStream {
-    match requires_irql_impl(attr, item) {
-        Ok(tokens) => tokens,
-        Err(e) => e.to_compile_error().into(),
-    }
-}
-
-fn requires_irql_impl(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
-    if attr.is_empty() {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "expected IRQL level argument, e.g., #[requires_irql(Passive)]",
-        ));
-    }
-
-    let irql_type: Type = syn::parse(attr)?;
-
-    if let Ok(mut input_fn) = syn::parse::<ItemFn>(item.clone()) {
-        process_function(&mut input_fn, &irql_type);
-        return Ok(TokenStream::from(quote! { #input_fn }));
-    }
-
-    if let Ok(mut input_impl) = syn::parse::<ItemImpl>(item) {
-        process_impl_block(&mut input_impl, &irql_type);
-        return Ok(TokenStream::from(quote! { #input_impl }));
-    }
-
-    Err(syn::Error::new(
-        proc_macro2::Span::call_site(),
-        "#[requires_irql] can only be applied to functions or impl blocks",
-    ))
-}
-
-fn process_function(input_fn: &mut ItemFn, irql_type: &Type) {
-    input_fn.sig.generics.params.push(parse_quote! { IRQL });
-
-    let where_clause = input_fn.sig.generics.make_where_clause();
-    where_clause
-        .predicates
-        .push(parse_quote! { IRQL: ::irql::IrqlCanRaiseTo<#irql_type> });
-
-    input_fn.block.stmts.insert(
-        0,
-        parse_quote! {
-            #[allow(unused_macros)]
-            macro_rules! call_irql {
-                ($($tt:tt)*) => {
-                    ::irql::call_irql_inner!(#irql_type, $($tt)*)
-                };
-            }
-        },
-    );
-
-    input_fn.block.stmts.insert(
-        0,
-        parse_quote! {
-            let _ = ::core::marker::PhantomData::<IRQL>;
-        },
-    );
-}
-
-fn process_impl_block(input_impl: &mut ItemImpl, irql_type: &Type) {
-    for item in &mut input_impl.items {
-        if let ImplItem::Fn(method) = item {
-            method.sig.generics.params.push(parse_quote! { IRQL });
-
-            let where_clause = method.sig.generics.make_where_clause();
-            where_clause
-                .predicates
-                .push(parse_quote! { IRQL: ::irql::IrqlCanRaiseTo<#irql_type> });
-
-            method.block.stmts.insert(
-                0,
-                parse_quote! {
-                    #[allow(unused_macros)]
-                    macro_rules! call_irql {
-                        ($($tt:tt)*) => {
-                            ::irql::call_irql_inner!(#irql_type, $($tt)*)
-                        };
-                    }
-                },
-            );
-
-            method.block.stmts.insert(
-                0,
-                parse_quote! {
-                    let _ = ::core::marker::PhantomData::<IRQL>;
-                },
-            );
-        }
-    }
-}
-
-#[proc_macro_attribute]
-pub fn root_irql(attr: TokenStream, item: TokenStream) -> TokenStream {
-    match root_irql_impl(attr, item) {
-        Ok(tokens) => tokens,
-        Err(e) => e.to_compile_error().into(),
-    }
-}
-
-fn root_irql_impl(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
-    if attr.is_empty() {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "expected IRQL level argument, e.g., #[root_irql(Passive)]",
-        ));
-    }
-
-    let irql_type: Type = syn::parse(attr)?;
-    let mut input_fn: ItemFn = syn::parse(item)?;
-
-    input_fn.block.stmts.insert(
-        0,
-        parse_quote! {
-            #[allow(unused_macros)]
-            macro_rules! call_irql {
-                ($($tt:tt)*) => {
-                    ::irql::call_irql_inner!(#irql_type, $($tt)*)
-                };
-            }
-        },
-    );
-
-    Ok(TokenStream::from(quote! { #input_fn }))
-}
-
-#[proc_macro_attribute]
-pub fn fn_trait_irql_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
-    match irql_impl_internal(attr, item) {
-        Ok(tokens) => tokens.into(),
-        Err(e) => e.to_compile_error().into(),
-    }
-}
-
-fn irql_impl_internal(
-    attr: TokenStream,
-    item: TokenStream,
-) -> syn::Result<proc_macro2::TokenStream> {
-    if attr.is_empty() {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "missing IRQL level: expected #[fn_trait_irql_requires(Passive)], #[fn_trait_irql_requires(Dispatch)], etc.",
-        ));
-    }
-
-    let irql_level: Type = syn::parse(attr)
-        .map_err(|e| syn::Error::new(e.span(), format!("invalid IRQL level: {}", e)))?;
-
-    let mut impl_block: ItemImpl = syn::parse(item)
-        .map_err(|e| syn::Error::new(e.span(), format!("expected trait impl block: {}", e)))?;
-
-    if impl_block.trait_.is_none() {
-        return Err(syn::Error::new_spanned(
-            &impl_block,
-            "#[fn_trait_irql_requires] requires a trait implementation. Example: impl IrqlFn<()> for MyType { ... }",
-        ));
-    }
-
-    let (_, trait_path, _) = impl_block.trait_.as_mut().unwrap();
-
-    let last_segment = trait_path
-        .segments
-        .last_mut()
-        .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "trait path is empty"))?;
-
-    let trait_name = last_segment.ident.to_string();
-
-    let args_type = match &last_segment.arguments {
-        syn::PathArguments::AngleBracketed(args) => {
-            if args.args.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    args,
-                    format!(
-                        "trait {} must have Args type parameter. Example: {}<Args>",
-                        trait_name, trait_name
-                    ),
-                ));
-            }
-            if args.args.len() != 1 {
-                return Err(syn::Error::new_spanned(
-                    args,
-                    format!(
-                        "expected exactly 1 type parameter (Args), found {}. IRQL level will be added automatically.",
-                        args.args.len()
-                    ),
-                ));
-            }
-            match args.args.first().unwrap() {
-                syn::GenericArgument::Type(ty) => ty.clone(),
-                arg => {
-                    return Err(syn::Error::new_spanned(
-                        arg,
-                        "expected type parameter for Args",
-                    ));
-                }
-            }
-        }
-        syn::PathArguments::None => {
-            return Err(syn::Error::new_spanned(
-                last_segment,
-                format!(
-                    "trait {} must have Args type parameter in angle brackets. Example: {}<()>",
-                    trait_name, trait_name
-                ),
-            ));
-        }
-        syn::PathArguments::Parenthesized(_) => {
-            return Err(syn::Error::new_spanned(
-                last_segment,
-                "parenthesized arguments not supported, use angle brackets for Args type",
-            ));
-        }
-    };
-
-    last_segment.arguments =
-        syn::PathArguments::AngleBracketed(parse_quote! { <#irql_level, #args_type> });
-
-    let method_count = impl_block
-        .items
-        .iter()
-        .filter(|item| matches!(item, ImplItem::Fn(_)))
-        .count();
-
-    if method_count == 0 {
-        return Err(syn::Error::new_spanned(
-            &impl_block,
-            "trait implementation must have at least one method",
-        ));
-    }
-
-    for item in impl_block.items.iter_mut() {
-        if let ImplItem::Fn(method) = item {
-            method.sig.generics.params.push(parse_quote! { IRQL });
-
-            let where_clause = method.sig.generics.make_where_clause();
-            where_clause.predicates.push(parse_quote! {
-                IRQL: ::irql::IrqlCanRaiseTo<#irql_level>
-            });
-
-            method.block.stmts.insert(
-                0,
-                parse_quote! {
-                    #[allow(unused_macros)]
-                    macro_rules! call_irql {
-                        ($($tt:tt)*) => {
-                            ::irql::call_irql_inner!(#irql_level, $($tt)*)
-                        };
-                    }
-                },
-            );
-        }
-    }
-
-    Ok(quote! { #impl_block })
 }
