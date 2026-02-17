@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "alloc_example"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "irql",
 ]
@@ -76,7 +76,7 @@ checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "basic"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "irql",
 ]
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "function_traits"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "irql",
 ]
@@ -284,7 +284,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "irql"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "irql_alloc",
  "irql_core",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "irql_alloc"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "irql_core",
  "wdk-sys",
@@ -301,11 +301,11 @@ dependencies = [
 
 [[package]]
 name = "irql_core"
-version = "0.1.5"
+version = "0.1.6"
 
 [[package]]
 name = "irql_macro"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -601,7 +601,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "struct_example"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "irql",
 ]
