@@ -21,7 +21,7 @@
 
 ```toml
 [dependencies]
-irql = "0.1.5"
+irql = "0.1.6"
 ```
 
 ```rust
@@ -107,7 +107,7 @@ The macro rewrites `IrqlFn<()>` to `IrqlFn<Passive, ()>` automatically.
 ## IRQL-aware allocation (nightly)
 
 ```toml
-irql = { version = "0.1.5", features = ["alloc"] }
+irql = { version = "0.1.6", features = ["alloc"] }
 ```
 
 Requires nightly (`allocator_api`, `vec_push_within_capacity`, `auto_traits`, `negative_impls`).

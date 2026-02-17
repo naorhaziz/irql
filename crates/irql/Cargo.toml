@@ -25,6 +25,6 @@ drop-safety = ["irql_core/drop-safety"]
 alloc = ["dep:irql_alloc", "drop-safety"]
 
 [dependencies]
-irql_core = { path = "../irql_core" }
-irql_macro = { path = "../irql_macro" }
-irql_alloc = { path = "../irql_alloc", optional = true }
+irql_core = { version = "0.1.6", path = "../irql_core" }
+irql_macro = { version = "0.1.6", path = "../irql_macro" }
+irql_alloc = { version = "0.1.6", path = "../irql_alloc", optional = true }
