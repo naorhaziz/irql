@@ -2,34 +2,27 @@
   <img src="https://github.com/naorhaziz/irql/blob/main/Logo.png?raw=true" alt="irql" width="350">
 </p>
 
-# IRQL — Compile-Time IRQL Safety for Windows Kernel Drivers
+<h1 align="center">IRQL — Compile-Time IRQL Safety for Windows Kernel Drivers</h1>
 
-[![Crates.io](https://img.shields.io/crates/v/irql.svg)](https://crates.io/crates/irql)
-[![Documentation](https://docs.rs/irql/badge.svg)](https://docs.rs/irql)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
+<p align="center">
+  <a href="https://crates.io/crates/irql"><img src="https://img.shields.io/crates/v/irql.svg" alt="Crates.io"></a>
+  <a href="https://docs.rs/irql"><img src="https://docs.rs/irql/badge.svg" alt="Documentation"></a>
+  <a href="https://github.com/naorhaziz/irql/actions/workflows/ci.yml"><img src="https://github.com/naorhaziz/irql/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+</p>
 
-Compile-time verification of IRQL (Interrupt Request Level) constraints for
-Windows kernel-mode drivers. IRQL violations become compiler errors — zero
-runtime cost.
+<p align="center">
+  IRQL violations cause blue screens. This crate catches them at compile time.<br>
+  <strong>Zero runtime cost. Zero binary overhead.</strong>
+</p>
 
-## Features
-
-- **Compile-time safety** — IRQL violations are caught by `rustc`, not at runtime
-- **Zero overhead** — all checks use the type system; nothing emitted at runtime
-- **Clear diagnostics** — custom `#[diagnostic::on_unimplemented]` messages
-- **Ergonomic** — one attribute (`#[irql()]`) for functions, impl blocks, and trait impls
-- **Function traits** — IRQL-safe `IrqlFn`, `IrqlFnMut`, `IrqlFnOnce`
-- **`no_std`** — designed for kernel-mode environments
-
-## Installation
+---
 
 ```toml
 [dependencies]
-irql = "0.1.4"
+irql = "0.1.5"
 ```
-
-## Quick start
 
 ```rust
 use irql::{irql, Dispatch, Passive};
@@ -39,7 +32,7 @@ fn acquire_spinlock() { /* … */ }
 
 #[irql(max = Passive)]
 fn driver_routine() {
-    call_irql!(acquire_spinlock()); // OK — raising IRQL
+    call_irql!(acquire_spinlock()); // Passive can raise to Dispatch
 }
 
 #[irql(at = Passive)]
@@ -48,285 +41,121 @@ fn driver_entry() {
 }
 ```
 
+If it compiles, your IRQL transitions are valid.
+
+## How it works
+
+`#[irql(max = Dispatch)]` adds a hidden `IRQL` type parameter bounded by `IrqlCanRaiseTo<Dispatch>`. `call_irql!` threads it through every call as a turbofish argument. The compiler checks every transition — trying to lower IRQL is a compile error:
+
+```text
+error[E0277]: IRQL violation: cannot reach `Passive` from `Dispatch`
+              -- would require lowering
+```
+
 ## The `#[irql()]` attribute
 
-| Form                        | Meaning                                          |
-| --------------------------- | ------------------------------------------------ |
-| `#[irql(at = Level)]`       | Fixed entry point — known IRQL, no generic added |
-| `#[irql(max = Level)]`      | Callable from `Level` or below (ceiling)         |
-| `#[irql(min = A, max = B)]` | Callable in the range \[A, B\]                   |
+| Form                        | Meaning                                    |
+| --------------------------- | ------------------------------------------ |
+| `#[irql(at = Level)]`       | Fixed entry point — known IRQL, no generic |
+| `#[irql(max = Level)]`      | Callable from `Level` or below             |
+| `#[irql(min = A, max = B)]` | Callable in \[A, B\]                       |
 
-- **`max` is required** unless using `at` — it defines the IRQL ceiling that
-  `call_irql!` relies on.
-- **`min` is optional** — adds a floor constraint (`IrqlCanLowerTo`).
-- **`at` is mutually exclusive** with `min`/`max`.
-
-Works on **functions**, **inherent impl blocks**, and **trait impl blocks**.
+Works on **functions**, **impl blocks**, and **trait impl blocks**.
 
 ## IRQL levels
 
-| Value | Type       | Description                              |
-| ----- | ---------- | ---------------------------------------- |
-| 0     | `Passive`  | Normal thread execution; paged memory OK |
-| 1     | `Apc`      | Asynchronous Procedure Call delivery     |
-| 2     | `Dispatch` | DPC / spinlock level                     |
-| 3–26  | `Dirql`    | Device interrupt levels                  |
-| 27    | `Profile`  | Profiling timer                          |
-| 28    | `Clock`    | Clock interrupt                          |
-| 29    | `Ipi`      | Inter-processor interrupt                |
-| 30    | `Power`    | Power failure                            |
-| 31    | `High`     | Highest — machine check                  |
+| Value | Type       | Description                    |
+| ----- | ---------- | ------------------------------ |
+| 0     | `Passive`  | Normal thread; paged memory OK |
+| 1     | `Apc`      | APC delivery                   |
+| 2     | `Dispatch` | DPC / spinlock                 |
+| 3–26  | `Dirql`    | Device interrupts              |
+| 27    | `Profile`  | Profiling timer                |
+| 28    | `Clock`    | Clock interrupt                |
+| 29    | `Ipi`      | Inter-processor interrupt      |
+| 30    | `Power`    | Power failure                  |
+| 31    | `High`     | Highest — machine check        |
 
-## The golden rule
+## Impl blocks
 
-> **IRQL can only stay the same or be raised, never lowered.**
-
-Attempting to call a lower-IRQL function produces a compile error:
+Apply `#[irql]` to an entire `impl` block — every method gets the constraint:
 
 ```rust
-#[irql(max = Passive)]
-fn passive_only() {}
-
-#[irql(max = Dispatch)]
-fn at_dispatch() {
-    call_irql!(passive_only()); // ✗ compile error
-}
-```
-
-```text
-error[E0277]: IRQL violation: cannot reach `Passive` from `Dispatch` -- would require lowering
-  --> src/main.rs:6:5
-   |
-   = note: IRQL can only stay the same or be raised, never lowered
-```
-
-## Examples
-
-### Basic functions
-
-```rust
-use irql::{irql, Dispatch, Passive};
-
-#[irql(max = Dispatch)]
-fn dispatch_work() {}
-
-#[irql(max = Passive)]
-fn passive_work() {
-    call_irql!(dispatch_work()); // Passive can raise to Dispatch
-}
-
-#[irql(at = Passive)]
-fn main() {
-    call_irql!(passive_work());
-}
-```
-
-### Structs and impl blocks
-
-```rust
-use irql::{irql, Dispatch, Passive};
-
 struct Device { name: &'static str }
 
 #[irql(max = Dispatch)]
 impl Device {
-    fn new(name: &'static str) -> Self {
-        Device { name }
-    }
-
-    fn process_interrupt(&self) { /* … */ }
-}
-
-struct Driver { device: Device }
-
-#[irql(max = Passive)]
-impl Driver {
-    fn new(name: &'static str) -> Self {
-        Driver { device: call_irql!(Device::new(name)) }
-    }
-
-    fn start(&self) {
-        call_irql!(self.device.process_interrupt());
-    }
-}
-
-#[irql(at = Passive)]
-fn main() {
-    let driver = call_irql!(Driver::new("example"));
-    call_irql!(driver.start());
+    fn new(name: &'static str) -> Self { Device { name } }
+    fn process(&self) { /* … */ }
 }
 ```
 
-### IRQL-safe function traits
+## Function traits
 
-The library provides `IrqlFn`, `IrqlFnMut`, and `IrqlFnOnce` — IRQL-aware
-analogues of `Fn`, `FnMut`, and `FnOnce`. Use the same `#[irql()]` attribute
-on trait impl blocks; the macro rewrites `IrqlFn<Args>` → `IrqlFn<Level, Args>`
-automatically.
+`IrqlFn`, `IrqlFnMut`, `IrqlFnOnce` — IRQL-aware analogues of `Fn`, `FnMut`, `FnOnce`:
 
 ```rust
-use irql::{irql, IrqlFn, IrqlFnMut, IrqlFnOnce, Dispatch, Passive};
-
-struct Reader { value: u32 }
-
 #[irql(max = Passive)]
 impl IrqlFn<()> for Reader {
     type Output = u32;
     fn call(&self, _: ()) -> u32 { self.value }
 }
-
-struct Counter { count: u32 }
-
-#[irql(max = Passive)]
-impl IrqlFnMut<()> for Counter {
-    type Output = u32;
-    fn call_mut(&mut self, _: ()) -> u32 {
-        self.count += 1;
-        self.count
-    }
-}
-
-struct Message(String);
-
-#[irql(max = Dispatch)]
-impl IrqlFnOnce<()> for Message {
-    type Output = String;
-    fn call_once(self, _: ()) -> String { self.0 }
-}
-
-#[irql(at = Passive)]
-fn main() {
-    let reader = Reader { value: 42 };
-    println!("{}", call_irql!(reader.call(())));
-
-    let mut counter = Counter { count: 0 };
-    println!("{}", call_irql!(counter.call_mut(())));
-
-    let msg = Message("Hello from Dispatch!".into());
-    println!("{}", call_irql!(msg.call_once(())));
-}
 ```
 
-### Range constraints with `min`
+The macro rewrites `IrqlFn<()>` to `IrqlFn<Passive, ()>` automatically.
 
-Use `min` to enforce a floor — the caller must be **at or above** the minimum:
+## IRQL-aware allocation (nightly)
 
-```rust
-use irql::{irql, Passive, Dispatch};
-
-// Only callable from [Passive, Dispatch] — not from Dirql or above
-#[irql(min = Passive, max = Dispatch)]
-fn passive_to_dispatch_only() {}
-
-#[irql(at = Passive)]
-fn main() {
-    call_irql!(passive_to_dispatch_only()); // OK: Passive ∈ [Passive, Dispatch]
-}
+```toml
+irql = { version = "0.1.5", features = ["alloc"] }
 ```
 
-## How it works
+Requires nightly (`allocator_api`, `vec_push_within_capacity`, `auto_traits`, `negative_impls`).
 
-### Type-level IRQL encoding
+### Pool types
 
-Each IRQL level is a zero-sized type — no runtime cost:
+| Pool           | Allocable at                 | Accessible at    |
+| -------------- | ---------------------------- | ---------------- |
+| `PagedPool`    | `Passive`, `Apc`             | `Passive`, `Apc` |
+| `NonPagedPool` | `Passive`, `Apc`, `Dispatch` | Any IRQL         |
 
-```rust
-pub struct Passive;
-pub struct Dispatch;
-// … 9 levels total
-```
+`IrqlBox::new` and `IrqlVec::new` pick the cheapest legal pool automatically.
 
-### Trait-based hierarchy
-
-The `IrqlCanRaiseTo` trait encodes which transitions are valid:
-
-```rust
-// Passive can raise to Dispatch (impl exists)
-impl IrqlCanRaiseTo<Dispatch> for Passive {}
-
-// Dispatch cannot lower to Passive (no impl — compile error)
-```
-
-`IrqlCanLowerTo` works in the opposite direction for `min` constraints.
-
-### Macro expansion
-
-`#[irql(max = Dispatch)]` adds an `IRQL` generic bounded by
-`IrqlCanRaiseTo<Dispatch>`:
-
-```rust
-// Source:
-#[irql(max = Dispatch)]
-fn process() {}
-
-// Expands to:
-fn process<IRQL>()
-where
-    IRQL: IrqlCanRaiseTo<Dispatch>,
-{
-    macro_rules! call_irql { /* injects IRQL as turbofish */ }
-}
-```
-
-`call_irql!(f())` rewrites the call to `f::<IRQL>()`, threading the IRQL type
-through the call chain. The compiler verifies every transition.
-
-## API reference
-
-### `#[irql()]` attribute
-
-| Syntax                      | Target       | Effect                               |
-| --------------------------- | ------------ | ------------------------------------ |
-| `#[irql(at = Level)]`       | `fn`         | Fixed entry point — no generic added |
-| `#[irql(max = Level)]`      | `fn`, `impl` | Adds `IRQL: IrqlCanRaiseTo<Level>`   |
-| `#[irql(min = A, max = B)]` | `fn`, `impl` | Also adds `IRQL: IrqlCanLowerTo<A>`  |
-
-### `call_irql!`
-
-Calls an IRQL-constrained function or method, threading the `IRQL` type:
-
-```rust
-call_irql!(some_function());        // free function
-call_irql!(self.device.process());  // method call
-let d = call_irql!(Device::new(1)); // constructor
-```
-
-### Function traits
-
-| Trait                                    | Analogous to | Method                      |
-| ---------------------------------------- | ------------ | --------------------------- |
-| `IrqlFn<Level, Args, Min = Passive>`     | `Fn`         | `call(&self, args)`         |
-| `IrqlFnMut<Level, Args, Min = Passive>`  | `FnMut`      | `call_mut(&mut self, args)` |
-| `IrqlFnOnce<Level, Args, Min = Passive>` | `FnOnce`     | `call_once(self, args)`     |
-
-When writing an impl, you only provide `Args` — the macro fills in `Level`
-(and `Min` if `min` is set):
+### IrqlBox and IrqlVec
 
 ```rust
 #[irql(max = Passive)]
-impl IrqlFn<()> for MyType { /* … */ }
-// Expands to: impl IrqlFn<Passive, ()> for MyType { … }
+fn example() -> Result<(), AllocError> {
+    let data = call_irql!(IrqlBox::new(42))?;
+    let val = call_irql!(data.get());
+
+    let v = irql_vec![1, 2, 3]?;
+    call_irql!(v.push(42))?;
+
+    // FFI: transfer ownership via raw pointer
+    let ptr = data.into_raw();
+    let data = unsafe { IrqlBox::<_, PagedPool>::from_raw(ptr) };
+    Ok(())
+}
 ```
 
-## Safety considerations
+### Drop safety
 
-All checks are **compile-time only**. You must ensure:
+Paged-pool containers cannot be dropped at `Dispatch` or above. The `#[irql]` macro injects `SafeToDropAt<Level>` bounds on by-value parameters, so passing paged-pool memory into elevated-IRQL code is a compile error. References (`&IrqlBox`) are not gated. Use `leak()` or `into_raw()` to transfer ownership across IRQL boundaries.
 
-- Entry points (`#[irql(at = …)]`) match the actual runtime IRQL
-- IRQL-raising operations (e.g. acquiring spinlocks) are properly modelled
+## Crate architecture
 
-### Best practices
+```text
+irql           ← public facade (re-exports everything)
+├── irql_core  ← levels, hierarchy traits, function traits, SafeToDropAt
+├── irql_macro ← #[irql] proc macro, call_irql! rewriter
+└── irql_alloc ← IrqlBox, IrqlVec, pool allocator (optional, nightly)
+```
 
-1. **Annotate entry points** with `#[irql(at = Level)]` matching the real runtime IRQL
-2. **Prefer `max`** for most functions — it's the ceiling that `call_irql!` relies on
-3. **Use `min`** only when a function genuinely requires a minimum IRQL floor
-4. **Keep constraints tight** — don't use `max = High` when `max = Dispatch` suffices
+## Safety
+
+All checks are compile-time only. You must ensure entry points (`#[irql(at = …)]`) match the actual runtime IRQL and that IRQL-raising operations are properly modelled.
 
 ## License
 
-Licensed under either of
-
-- [MIT license](LICENSE-MIT)
-- [Apache License, Version 2.0](LICENSE-APACHE)
-
-at your option.
+[MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option.

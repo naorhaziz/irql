@@ -14,6 +14,17 @@ readme = "../../README.md"
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
 
+[features]
+default = []
+## `SafeToDropAt*` auto traits for compile-time drop-safety checks.
+## **Requires nightly** (`#![feature(auto_traits)]`).
+## Automatically enabled by `alloc`.
+drop-safety = ["irql_core/drop-safety"]
+## IRQL-aware kernel pool allocator types (`IrqlBox`, `IrqlVec`).
+## **Requires nightly** (`#![feature(allocator_api)]`).
+alloc = ["dep:irql_alloc", "drop-safety"]
+
 [dependencies]
-irql_core = { version = "0.1.4", path = "../irql_core" }
-irql_macro = { version = "0.1.4", path = "../irql_macro" }
+irql_core = { path = "../irql_core" }
+irql_macro = { path = "../irql_macro" }
+irql_alloc = { path = "../irql_alloc", optional = true }

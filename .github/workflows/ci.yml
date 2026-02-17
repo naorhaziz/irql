@@ -1,56 +1,103 @@
 name: CI
 
 on:
-    push:
-        branches: [main]
-    pull_request:
-        branches: [main]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  RUSTDOCFLAGS: "-D warnings"
 
 jobs:
-    build:
-        name: Build
-        runs-on: windows-latest
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
-        steps:
-            - uses: actions/checkout@v4
+  stable:
+    name: Stable (no alloc)
+    runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
 
-            - name: Install Rust
-              uses: dtolnay/rust-toolchain@stable
-              with:
-                  components: rustfmt, clippy
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
-            - name: Cache cargo registry
-              uses: actions/cache@v4
-              with:
-                  path: ~/.cargo/registry
-                  key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - uses: Swatinem/rust-cache@v2
 
-            - name: Cache cargo index
-              uses: actions/cache@v4
-              with:
-                  path: ~/.cargo/git
-                  key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build
+        run: >
+          cargo build
+          -p irql_core
+          -p irql_macro
+          -p irql
+          -p basic
+          -p struct_example
+          -p function_traits
 
-            - name: Cache cargo build
-              uses: actions/cache@v4
-              with:
-                  path: target
-                  key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - name: Clippy
+        run: >
+          cargo clippy
+          -p irql_core
+          -p irql_macro
+          -p irql
+          -p basic
+          -p struct_example
+          -p function_traits
+          -- -D warnings
 
-            - name: Check formatting
-              run: cargo fmt --all -- --check
+      - name: Test
+        run: >
+          cargo test
+          -p irql_core
+          -p irql_macro
+          -p irql
 
-            - name: Run clippy
-              run: cargo clippy --all --all-targets -- -D warnings
+      - name: Doc
+        run: >
+          cargo doc --no-deps
+          -p irql_core
+          -p irql_macro
+          -p irql
 
-            - name: Build all crates
-              run: cargo build --all --verbose
+  nightly:
+    name: Nightly (alloc + drop-safety)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
 
-            - name: Run tests
-              run: cargo test --all --verbose
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
 
-            - name: Build documentation
-              run: cargo doc --no-deps --all --verbose
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Doc
+        run: cargo doc --no-deps --workspace

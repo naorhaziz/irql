@@ -2,6 +2,7 @@
 name = "struct_example"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 irql = { path = "../../crates/irql" }

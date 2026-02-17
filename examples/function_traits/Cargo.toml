@@ -2,6 +2,7 @@
 name = "function_traits"
 version.workspace = true
 edition.workspace = true
+publish = false
 
 [dependencies]
 irql = { path = "../../crates/irql" }

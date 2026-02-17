@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Procedural macros for IRQL safety"
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/irql"
 keywords.workspace = true
 categories.workspace = true
 readme = "../../README.md"

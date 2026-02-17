@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Core types and traits for IRQL safety"
 license.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/irql"
 keywords.workspace = true
 categories.workspace = true
 readme = "../../README.md"
@@ -12,5 +13,12 @@ readme = "../../README.md"
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
 targets = ["x86_64-pc-windows-msvc"]
+
+[features]
+default = []
+## Enable `SafeToDropAt*` auto traits for compile-time drop-safety checks.
+## **Requires nightly** (`#![feature(auto_traits)]`).
+## Automatically enabled by `irql/alloc`.
+drop-safety = []
 
 [dependencies]
