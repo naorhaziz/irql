@@ -1,0 +1,24 @@
+[package]
+name = "irql_alloc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+documentation = "https://docs.rs/irql"
+description = "IRQL-aware kernel pool allocator types (requires nightly)"
+readme = "../../README.md"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(driver_model__driver_type, values("WDM", "KMDF"))',
+] }
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc"]
+
+[dependencies]
+irql_core = { path = "../irql_core", features = ["drop-safety"] }
+wdk-sys = { version = "0.5.1", default-features = false }

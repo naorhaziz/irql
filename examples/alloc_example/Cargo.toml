@@ -1,8 +1,8 @@
 [package]
-name = "basic"
+name = "alloc_example"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
-irql = { path = "../../crates/irql" }
+irql = { path = "../../crates/irql", features = ["alloc"] }
